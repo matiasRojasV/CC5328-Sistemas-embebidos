@@ -162,12 +162,12 @@
        <attribute name="title">
         <string>Eje X</string>
        </attribute>
-       <widget class="QComboBox" name="comboBox_13">
+       <widget class="QComboBox" name="combo_func_x">
         <property name="geometry">
          <rect>
           <x>110</x>
           <y>20</y>
-          <width>111</width>
+          <width>281</width>
           <height>26</height>
          </rect>
         </property>
@@ -192,7 +192,7 @@
          </property>
         </item>
        </widget>
-       <widget class="QComboBox" name="comboBox_11">
+       <widget class="QComboBox" name="combo_amp_x">
         <property name="geometry">
          <rect>
           <x>10</x>
@@ -233,7 +233,7 @@
          <string>Frecuencia</string>
         </property>
        </widget>
-       <widget class="QComboBox" name="comboBox_12">
+       <widget class="QComboBox" name="combo_freq_x">
         <property name="geometry">
          <rect>
           <x>10</x>
@@ -302,12 +302,12 @@
        <attribute name="title">
         <string>Eje Y</string>
        </attribute>
-       <widget class="QComboBox" name="comboBox_10">
+       <widget class="QComboBox" name="combo_func_y">
         <property name="geometry">
          <rect>
           <x>110</x>
           <y>20</y>
-          <width>111</width>
+          <width>281</width>
           <height>26</height>
          </rect>
         </property>
@@ -332,7 +332,7 @@
          </property>
         </item>
        </widget>
-       <widget class="QComboBox" name="comboBox_9">
+       <widget class="QComboBox" name="combo_amp_y">
         <property name="geometry">
          <rect>
           <x>10</x>
@@ -399,7 +399,7 @@
          <string>Frecuencia</string>
         </property>
        </widget>
-       <widget class="QComboBox" name="comboBox_7">
+       <widget class="QComboBox" name="combo_freq_y">
         <property name="geometry">
          <rect>
           <x>10</x>
@@ -455,12 +455,12 @@
          <string>Amplitud (g)</string>
         </property>
        </widget>
-       <widget class="QComboBox" name="comboBox_5">
+       <widget class="QComboBox" name="combo_func_z">
         <property name="geometry">
          <rect>
           <x>110</x>
           <y>20</y>
-          <width>111</width>
+          <width>281</width>
           <height>26</height>
          </rect>
         </property>
@@ -511,7 +511,7 @@
          <string>Frecuencia</string>
         </property>
        </widget>
-       <widget class="QComboBox" name="comboBox_6">
+       <widget class="QComboBox" name="combo_freq_z">
         <property name="geometry">
          <rect>
           <x>10</x>
@@ -549,7 +549,7 @@
          </property>
         </item>
        </widget>
-       <widget class="QComboBox" name="comboBox_8">
+       <widget class="QComboBox" name="combo_amp_z">
         <property name="geometry">
          <rect>
           <x>10</x>

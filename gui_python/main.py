@@ -1,5 +1,6 @@
 import sys
 import threading
+import random
 import time
 import serial
 import struct
@@ -48,8 +49,8 @@ class LivePlot(FigureCanvas):
         self.line.set_data(self.x_data, self.y_data)
 
         # ajustamos los limites del grafico de forma dinamica
-        self.axes.set_xlim(max(0, x - self.max_points), x+5)
-        self.axes.set_ylim(min(self.y_data) - 1, max(self.y_data) + 1 if self.y_data else 5)
+        self.axes.relim()
+        self.axes.autoscale_view()
 
     def update_canvas(self):
 
@@ -72,6 +73,16 @@ class DataReceiver(QObject):
 
     @pyqtSlot()
     def receiver_loop(self):
+        # -- Modo simulador --
+        if self.port == "SIMULADOR":
+            print("Iniciando modo simulador sin hardware...")
+            while self.running:
+                self.accel_received.emit(random.uniform(-4, 4), random.uniform(-4, 4), random.uniform(-4, 4))
+                self.env_received.emit(random.uniform(15.0, 30.0), random.uniform(20.0, 40.0))
+                time.sleep(0.033)
+            return
+
+        # -- Modo real --
         MARKER = b"<{DP}>"
         HEADER_LEN = len(MARKER) + 2
 
@@ -116,6 +127,17 @@ class DataReceiver(QObject):
         finally:
             if self.serial_conn and self.serial_conn.is_open:
                 self.serial_conn.close()
+            print("conexion detenida")
+
+    @pyqtSlot(str)
+    def send_command(self, command_str: str):
+        if self.serial_conn and self.serial_conn.is_open:
+
+            try:
+                self.serial_conn.write(command_str.encode('utf-8'))
+                print(f"Comando enviado: {command_str.strip()}")
+            except Exception as e:
+                self.error_received.emit(f"Error al enviar: {str(e)}")
 
     def stop(self):
         self.running = False
@@ -128,7 +150,7 @@ class AppWindow(QMainWindow):
         self.ui.setupUi(self)
 
         # agregamos puertos seriales de prueba para windows
-        self.ui.comboBox_puerto.addItems(["COM3", "COM4"])
+        self.ui.comboBox_puerto.addItems(["SIMULADOR","COM3", "COM4"])
         # Agregamos puertos seriales de prueba para Linux
         # self.ui.comboBox_puerto.addItems(["/dev/ttyUSB0"]) 
         
@@ -151,6 +173,18 @@ class AppWindow(QMainWindow):
         self.ui.btn_conectar.clicked.connect(self.start_connection)
         self.ui.btn_desconectar.clicked.connect(self.stop_connection)
 
+        self.ui.combo_func_x.currentIndexChanged.connect(lambda: self.update_esp32_config('X'))
+        self.ui.combo_amp_x.currentTextChanged.connect(lambda: self.update_esp32_config('X'))
+        self.ui.combo_freq_x.currentTextChanged.connect(lambda: self.update_esp32_config('X'))
+
+        self.ui.combo_func_y.currentIndexChanged.connect(lambda: self.update_esp32_config('Y'))
+        self.ui.combo_amp_y.currentTextChanged.connect(lambda: self.update_esp32_config('Y'))
+        self.ui.combo_freq_y.currentTextChanged.connect(lambda: self.update_esp32_config('Y'))
+
+        self.ui.combo_func_z.currentIndexChanged.connect(lambda: self.update_esp32_config('Z'))
+        self.ui.combo_amp_z.currentTextChanged.connect(lambda: self.update_esp32_config('Z'))
+        self.ui.combo_freq_z.currentTextChanged.connect(lambda: self.update_esp32_config('Z'))
+
     @pyqtSlot(float, float, float)
     def update_accel(self, x, y, z):
         # tiempo desde la conexion
@@ -166,7 +200,7 @@ class AppWindow(QMainWindow):
         # tiempo desde la conexion
         current_time = time.time() - self.init_time
 
-        self.plot_env.add_point(current_time, temp) #graficamos la temperatura
+        self.plot_ambiente.add_point(current_time, temp) #graficamos la temperatura
 
         #actualizamos las cajas LCD de la interfaz
         self.ui.lcdNumber_temp.display(temp)
@@ -179,8 +213,12 @@ class AppWindow(QMainWindow):
             return
 
         #capturamos los datos de la conexion de la GUI
-        puerto = self.ui.comboBox_puerto.currentText()
-        baudrate = int(self.ui.comboBox_baudrate.currentText())
+        try:
+            puerto = self.ui.comboBox_puerto.currentText()
+            baudrate = int(self.ui.comboBox_baudrate.currentText())
+        except ValueError:
+            print("Error: valores de conexión inválidos")
+            return
 
         #reiniciamos el tiempo de los graficos
         self.init_time = time.time()
@@ -206,6 +244,30 @@ class AppWindow(QMainWindow):
             self.thread.quit() # se cierra el hilo (se lo pide al hilo de Qt)
             self.thread.wait() # esperamos a que termine de cerrarse
             print("conexion detenida")
+
+    def update_esp32_config(self, eje):
+
+        # no enviar comando si no estamos conectados
+        if not self.receiver or not self.thread.isRunning():
+            return
+
+        # dependiendo del eje modificado, se lee lo que tienen los controles de los botones de la GUI
+        if eje == "X":
+            func = self.ui.combo_func_x.currentIndex()
+            amp = self.ui.combo_amp_x.currentText()
+            freq = self.ui.combo_freq_x.currentText()
+        elif eje == 'Y':
+            func = self.ui.combo_func_y.currentIndex()
+            amp = self.ui.combo_amp_y.currentText()
+            freq = self.ui.combo_freq_y.currentText()
+        elif eje == 'Z':
+            func = self.ui.combo_func_z.currentIndex()
+            amp = self.ui.combo_amp_z.currentText()
+            freq = self.ui.combo_freq_z.currentText()
+
+        #construimos el comando a enviar al esp32
+        comando = f"SET_ACC, {eje}, {func}, {amp}, {freq}\n"
+        self.receiver.send_command(comando)
 
 
 if __name__ == "__main__":
