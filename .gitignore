@@ -1,2 +1,7 @@
 esp32_firmware/build/
 T1.pdf
+# Entornos virtuales de Python
+.venv/
+venv/
+env/
+ENV/
