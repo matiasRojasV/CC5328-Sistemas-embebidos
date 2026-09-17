@@ -64,7 +64,7 @@
        <string>Baud Rate:</string>
       </property>
      </widget>
-     <widget class="QComboBox" name="comboBox">
+     <widget class="QComboBox" name="comboBox_puerto">
       <property name="geometry">
        <rect>
         <x>110</x>
@@ -74,7 +74,7 @@
        </rect>
       </property>
      </widget>
-     <widget class="QComboBox" name="comboBox_2">
+     <widget class="QComboBox" name="comboBox_baudrate">
       <property name="geometry">
        <rect>
         <x>110</x>
@@ -94,11 +94,11 @@
        </property>
       </item>
      </widget>
-     <widget class="QPushButton" name="pushButton">
+     <widget class="QPushButton" name="btn_conectar">
       <property name="geometry">
        <rect>
         <x>20</x>
-        <y>150</y>
+        <y>170</y>
         <width>81</width>
         <height>26</height>
        </rect>
@@ -107,11 +107,11 @@
        <string>Conectar</string>
       </property>
      </widget>
-     <widget class="QPushButton" name="pushButton_2">
+     <widget class="QPushButton" name="btn_desconectar">
       <property name="geometry">
        <rect>
         <x>120</x>
-        <y>150</y>
+        <y>170</y>
         <width>81</width>
         <height>26</height>
        </rect>
@@ -120,7 +120,7 @@
        <string>Desconectar</string>
       </property>
      </widget>
-     <widget class="QPushButton" name="pushButton_3">
+     <widget class="QPushButton" name="btn_inicializar">
       <property name="geometry">
        <rect>
         <x>70</x>
@@ -618,7 +618,7 @@
        <string>60 segundos</string>
       </property>
      </widget>
-     <widget class="QLCDNumber" name="lcdNumber">
+     <widget class="QLCDNumber" name="lcdNumber_temp">
       <property name="geometry">
        <rect>
         <x>130</x>
@@ -654,7 +654,7 @@
        <string>Humedad:</string>
       </property>
      </widget>
-     <widget class="QLCDNumber" name="lcdNumber_2">
+     <widget class="QLCDNumber" name="lcdNumber_hum">
       <property name="geometry">
        <rect>
         <x>130</x>
