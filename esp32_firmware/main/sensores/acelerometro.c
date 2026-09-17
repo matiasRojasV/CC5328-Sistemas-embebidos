@@ -2,7 +2,7 @@
 #include <math.h>
 
 #ifndef M_PI
-#define M_PI 3.14159265358979323846
+#define M_PI 3.14159265358979323846f
 #endif
 
 void acelerometro_init(Acelerometro3Axial *acc) {
@@ -12,6 +12,7 @@ void acelerometro_init(Acelerometro3Axial *acc) {
 }
 
 bool acelerometro_procesar_eje(EjeAcelerometro *eje, int64_t now_us, float *out_val) {
+    if (eje->fs <= 0) return false;
     int64_t period_us = 1000000 / eje->fs;
 
     if ((now_us - eje->last_sample_us) >= period_us) {

@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -25,7 +26,7 @@ static Acelerometro3Axial acc;
 static SensorAmbientales sensor_env;
 static SemaphoreHandle_t config_mutex;
 
-// Función auxiliar para empaquetar y enviar floats según el protocolo del auxiliar
+// Función auxiliar para empaquetar y enviar floats
 void enviar_datos_binarios(float* values, uint16_t float_num) {
     uint8_t buf[PACKET_MAX_LEN];
     size_t len = 0;
@@ -57,7 +58,7 @@ void task_acelerometro(void *pvParameters) {
         bool new_z = acelerometro_procesar_eje(&acc.z, now_us, &val_z);
         xSemaphoreGive(config_mutex);
 
-        if (new_x || new_y || new_z) {
+        if (new_x && new_y && new_z) {
             values[0] = val_x;
             values[1] = val_y;
             values[2] = val_z;
@@ -96,23 +97,28 @@ void task_uart_rx(void *pvParameters) {
         if (len > 0) {
             data[len] = '\0';
             
-            // Ejemplo de comando de la GUI: "SET_ACC,X,2,8,200\n"
+            // Ejemplo de comando de la GUI: "SET_ACC,X,2,8,200\n" o "SET_ACC,x,2,8,200\n"
             if (strncmp((char*)data, "SET_ACC", 7) == 0) {
                 char eje; int func, amp, fs;
                 if (sscanf((char*)data, "SET_ACC,%c,%d,%d,%d", &eje, &func, &amp, &fs) == 4) {
-                    xSemaphoreTake(config_mutex, portMAX_DELAY);
-                    EjeAcelerometro *target = (eje == 'X') ? &acc.x : (eje == 'Y') ? &acc.y : &acc.z;
-                    target->funcion = func; target->A = (float)amp; target->fs = fs;
-                    xSemaphoreGive(config_mutex);
-                }
-            } 
-            // Comando: "SET_ENV,60\n"
-            else if (strncmp((char*)data, "SET_ENV", 7) == 0) {
-                int intervalo;
-                if (sscanf((char*)data, "SET_ENV,%d", &intervalo) == 1) {
-                    xSemaphoreTake(config_mutex, portMAX_DELAY);
-                    varAmbientales_set_intervalo(&sensor_env, intervalo);
-                    xSemaphoreGive(config_mutex);
+                    EjeAcelerometro *target = NULL;
+
+                    // Convierte el carácter a mayúscula 
+                    switch (toupper((unsigned char)eje)) {
+                        case 'X': target = &acc.x; break;
+                        case 'Y': target = &acc.y; break;
+                        case 'Z': target = &acc.z; break;
+                        default:  target = NULL;   break; // Ignora caracteres no válidos
+                    }
+
+                    // Solo aplica los cambios si el eje fue reconocido correctamente
+                    if (target != NULL) {
+                        xSemaphoreTake(config_mutex, portMAX_DELAY);
+                        target->funcion = func;
+                        target->A = (float)amp;
+                        target->fs = fs;
+                        xSemaphoreGive(config_mutex);
+                    }
                 }
             }
         }
@@ -120,7 +126,7 @@ void task_uart_rx(void *pvParameters) {
 }
 
 void app_main(void) {
-    // 1. Configuración UART (basada en el main_2.c de tu auxiliar)
+    // 1. Configuración UART 
     uart_config_t uart_config = {
         .baud_rate  = 115200,
         .data_bits  = UART_DATA_8_BITS,
