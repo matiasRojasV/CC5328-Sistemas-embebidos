@@ -5,3 +5,7 @@ T1.pdf
 venv/
 env/
 ENV/
+
+# cache de python
+**/__pycache__/
+*.pyc
