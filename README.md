@@ -37,10 +37,8 @@ Aplicación desarrollada en Python 3.8+ utilizando PyQt6 y Matplotlib.
 ## Instrucciones de Compilación y Ejecución
 
 **1. Firmware ESP32:**
-Desde la raíz del proyecto, ingresar a la carpeta del microcontrolador y compilar utilizando ESP-IDF:
-```bash
-rellenar
-```
+Desde la raíz del proyecto, ingresar a la carpeta del microcontrolador y compilar utilizando ESP-IDF
+
 **2. Aplicación Python:**
 desde la raiz del proyecto, instalar las dependencias en un entorno virtual y ejecutar la interfaz
 
@@ -51,6 +49,9 @@ desde la raiz del proyecto, instalar las dependencias en un entorno virtual y ej
 python -m venv .venv
 ## en linux (creo)
 python3 -m venv .venv
+
+# Activar entorno virtual 
+. .venv/bin/activate  
 
 # Instalacion de dependencias
 pip install -r gui_python/requirements.txt
