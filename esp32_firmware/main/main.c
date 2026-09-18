@@ -64,12 +64,12 @@ void task_acelerometro(void *pvParameters) {
             values[2] = val_z;
             enviar_datos_binarios(values, 3); // Enviamos 3 floats
         }
-        vTaskDelay(pdMS_TO_TICKS(1));
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
 // Tarea Variables Ambientales (TX)
-void task_varAmbientales(void *pvParameters) {
+void task_ambientales(void *pvParameters) {
     float temp = 0.0f, humedad = 0.0f;
     float values[2];
 
@@ -100,7 +100,7 @@ void task_uart_rx(void *pvParameters) {
             // Ejemplo de comando de la GUI: "SET_ACC,X,2,8,200\n" o "SET_ACC,x,2,8,200\n"
             if (strncmp((char*)data, "SET_ACC", 7) == 0) {
                 char eje; int func, amp, fs;
-                if (sscanf((char*)data, "SET_ACC,%c,%d,%d,%d", &eje, &func, &amp, &fs) == 4) {
+                if (sscanf((char*)data, "SET_ACC, %c, %d, %d, %d", &eje, &func, &amp, &fs) == 4) {
                     EjeAcelerometro *target = NULL;
 
                     // Convierte el carácter a mayúscula 
@@ -146,5 +146,5 @@ void app_main(void) {
     // 2. Iniciar tareas
     xTaskCreate(task_uart_rx, "uart_rx_task", 4096, NULL, 10, NULL);
     xTaskCreate(task_acelerometro, "acelerometro_task", 4096, NULL, 5, NULL);
-    xTaskCreate(task_varAmbientales, "varambientales_task", 4096, NULL, 4, NULL);
+    xTaskCreate(task_ambientales, "varambientales_task", 4096, NULL, 5, NULL);
 }
