@@ -114,14 +114,17 @@ class DataReceiver(QObject):
                     if len(buf) < HEADER_LEN + data_len:
                         break
 
-                    data = buf[:HEADER_LEN + data_len]
+                    data = buf[HEADER_LEN:HEADER_LEN + data_len]
                     values = struct.unpack(f"<{float_num}f", data)
+
+                    del buf[:HEADER_LEN + data_len]
 
                     # enviamos las señales de los datos correspondientes a los graficos segun la cantidad de valores recibidos
                     if float_num == 3: # si se reciben 3 valores son datos del acelerometro
                         self.accel_received.emit(values[0], values[1], values[2])
                     elif float_num == 2: # si son 2 valores son datos de temperatura y humedad
                         self.env_received.emit(values[0], values[1])
+
         except Exception as e:
             self.error_received.emit(str(e))
         finally:
@@ -152,7 +155,7 @@ class AppWindow(QMainWindow):
         # agregamos puertos seriales de prueba para windows
         self.ui.comboBox_puerto.addItems(["SIMULADOR","COM3", "COM4"])
         # Agregamos puertos seriales de prueba para Linux
-        # self.ui.comboBox_puerto.addItems(["/dev/ttyUSB0"]) 
+        self.ui.comboBox_puerto.addItems(["/dev/ttyUSB0"]) 
         
         #creamos las instancias de los graficos dinamicos del acelerometro
         self.plot_x = LivePlot(title="Aceleracion Eje X")
@@ -266,7 +269,7 @@ class AppWindow(QMainWindow):
             freq = self.ui.combo_freq_z.currentText()
 
         #construimos el comando a enviar al esp32
-        comando = f"SET_ACC, {eje}, {func}, {amp}, {freq}\n"
+        comando = f"SET_ACC,{eje},{func},{amp},{freq}\n"
         self.receiver.send_command(comando)
 
 
