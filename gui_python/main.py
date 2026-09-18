@@ -14,7 +14,7 @@ from matplotlib.figure import Figure
 from interfaz_v1_ui import Ui_MainWindow
 
 class LivePlot(FigureCanvas):
-    def __init__(self, max_points: int = 100, title= "Grafico", parent=None, fps = 30):
+    def __init__(self, max_points: int = 100, title= "Grafico", parent=None, fps = 30, is_ambiente = False):
 
         fig = Figure(figsize=(3, 2), dpi=100)
         self.axes = fig.add_subplot(111)
@@ -32,21 +32,39 @@ class LivePlot(FigureCanvas):
         self.x_data = deque(maxlen=max_points)
         self.y_data = deque(maxlen=max_points)
 
+        self.is_ambiente = is_ambiente # variable para saber si es referente al grafico de temperatura/humedad
+
         # inicializamos el grafico
-        self.line, = self.axes.plot([], [], 'r-')
+
+        if self.is_ambiente: # si es el de ambiente, creamos un grafico con una segunda linea para la humedad
+            self.y_data_hum = deque(maxlen=max_points) #una cola extra para los datos de la humedad
+            self.line_temp, = self.axes.plot([], [], 'g-', label='Temp (°C)')
+            self.line_hum, = self.axes.plot([], [], 'b-', label='Hum (%)')
+            self.axes.legend(loc='upper left', fontsize=7)
+
+        else:
+            self.line, = self.axes.plot([], [], 'r-')
 
         #aplicamos la tasa de refresco del grafico
         self.drawing_timer = QTimer(self)
         self.drawing_timer.timeout.connect(self.update_canvas)
         self.drawing_timer.start(fps)
 
-    def add_point(self, x, y):
+    def add_point(self, x, y, y_hum = None):
         self.x_data.append(x)
         self.y_data.append(y)
 
-        # actualizamos los datos de la linea
+        if self.is_ambiente:
 
-        self.line.set_data(self.x_data, self.y_data)
+            #actualizamos linea de temperatura
+            self.line_temp.set_data(self.x_data, self.y_data)
+
+            if y_hum is not None: # si se recibe el dato de humedad, lo agregamos a la segunda linea
+                self.y_data_hum.append(y_hum)
+                self.line_hum.set_data(self.x_data, self.y_data_hum)
+
+        else:
+            self.line.set_data(self.x_data, self.y_data)
 
         # ajustamos los limites del grafico de forma dinamica
         self.axes.relim()
@@ -161,7 +179,7 @@ class AppWindow(QMainWindow):
         self.plot_x = LivePlot(title="Aceleracion Eje X")
         self.plot_y = LivePlot(title="Aceleracion Eje Y")
         self.plot_z = LivePlot(title="Aceleracion Eje Z")
-        self.plot_ambiente = LivePlot(title="Historial Temperatura/Humedad")
+        self.plot_ambiente = LivePlot(title="Historial Temperatura/Humedad", is_ambiente=True) #grafico de temperatura y humedad
 
         # incrustamos las instacias recien creadas en los layouts vacios de la interfaz
         self.ui.layout_x.addWidget(self.plot_x)
@@ -203,7 +221,7 @@ class AppWindow(QMainWindow):
         # tiempo desde la conexion
         current_time = time.time() - self.init_time
 
-        self.plot_ambiente.add_point(current_time, temp) #graficamos la temperatura
+        self.plot_ambiente.add_point(current_time, temp, hum) #graficamos la temperatura y la humedad
 
         #actualizamos las cajas LCD de la interfaz
         self.ui.lcdNumber_temp.display(temp)
