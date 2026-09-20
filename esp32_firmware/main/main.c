@@ -64,7 +64,7 @@ void task_acelerometro(void *pvParameters) {
             values[2] = val_z;
             enviar_datos_binarios(values, 3); // Enviamos 3 floats
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
@@ -97,7 +97,7 @@ void task_uart_rx(void *pvParameters) {
         if (len > 0) {
             data[len] = '\0';
             
-            // Ejemplo de comando de la GUI: "SET_ACC,X,2,8,200\n" o "SET_ACC,x,2,8,200\n"
+            
             if (strncmp((char*)data, "SET_ACC", 7) == 0) {
                 char eje; int func, amp, fs;
                 if (sscanf((char*)data, "SET_ACC, %c, %d, %d, %d", &eje, &func, &amp, &fs) == 4) {
@@ -121,7 +121,17 @@ void task_uart_rx(void *pvParameters) {
                     }
                 }
             }
+            // Comando SET_ENV
+            else if (strncmp((char*)data, "SET_ENV", 7) == 0) {
+                int intervalo;
+                if (sscanf((char*)data, "SET_ENV, %d", &intervalo) == 1) {
+                    xSemaphoreTake(config_mutex, portMAX_DELAY);
+                    varAmbientales_set_intervalo(&sensor_env, intervalo);
+                    xSemaphoreGive(config_mutex);
+                }
+            }
         }
+
     }
 }
 

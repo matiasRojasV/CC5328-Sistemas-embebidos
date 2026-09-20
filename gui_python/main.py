@@ -71,8 +71,13 @@ class LivePlot(FigureCanvas):
         self.axes.autoscale_view()
 
     def update_canvas(self):
-
         #usamos la funcion draw_idle para que no se bloquee la interfaz (es una funncion de matplotlib para redibujar mas facil)
+        self.draw_idle()
+
+    def clear(self):
+        self.x_data.clear()
+        self.y_data.clear()
+        self.line.set_data([], [])
         self.draw_idle()
 
 class DataReceiver(QObject):
@@ -193,6 +198,10 @@ class AppWindow(QMainWindow):
 
         self.ui.btn_conectar.clicked.connect(self.start_connection)
         self.ui.btn_desconectar.clicked.connect(self.stop_connection)
+        self.ui.btn_inicializar.clicked.connect(self.inicializar_esp32) 
+
+        self.ui.radioButton.toggled.connect(lambda checked: self.update_env_config(30) if checked else None)  
+        self.ui.radioButton_2.toggled.connect(lambda checked: self.update_env_config(60) if checked else None)
 
         self.ui.combo_func_x.currentIndexChanged.connect(lambda: self.update_esp32_config('X'))
         self.ui.combo_amp_x.currentTextChanged.connect(lambda: self.update_esp32_config('X'))
@@ -228,7 +237,6 @@ class AppWindow(QMainWindow):
         self.ui.lcdNumber_hum.display(hum)
 
     def start_connection(self):
-
         # si ya hay un hilo de conexion corriendo, no hacemos nada
         if self.thread.isRunning():
             return
@@ -267,7 +275,6 @@ class AppWindow(QMainWindow):
             print("conexion detenida")
 
     def update_esp32_config(self, eje):
-
         # no enviar comando si no estamos conectados
         if not self.receiver or not self.thread.isRunning():
             return
@@ -289,6 +296,32 @@ class AppWindow(QMainWindow):
         #construimos el comando a enviar al esp32
         comando = f"SET_ACC,{eje},{func},{amp},{freq}\n"
         self.receiver.send_command(comando)
+
+
+    def inicializar_esp32(self):
+        # Si el puerto no está abierto, conectar primero
+        if not self.thread.isRunning():
+            self.start_connection()
+            QThread.msleep(150)
+
+        # Reiniciar el tiempo y limpiar los 4 gráficos
+        self.init_time = time.time()
+        self.plot_x.clear()
+        self.plot_y.clear()
+        self.plot_z.clear()
+        self.plot_ambiente.clear()
+
+        # Reiniciar a valores por defecto
+        if self.receiver and self.thread.isRunning():
+            self.receiver.send_command("SET_ACC,X,1,4,100\n")
+            self.receiver.send_command("SET_ACC,Y,1,4,100\n")
+            self.receiver.send_command("SET_ACC,Z,1,4,100\n")
+            self.receiver.send_command("SET_ENV,30\n")
+
+    def update_env_config(self, intervalo_s):
+        if self.receiver and self.thread.isRunning():
+            comando = f"SET_ENV,{intervalo_s}\n"
+            self.receiver.send_command(comando)
 
 
 if __name__ == "__main__":

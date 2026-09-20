@@ -1,19 +1,20 @@
 import serial
 import struct
 import sys
+from datetime import datetime 
 
 MARKER = b"<{DP}>"
 HEADER_LEN = len(MARKER) + 2
 
 # Actualizamos el mensaje de uso para reflejar el nuevo argumento
-if len(sys.argv) < 2:
-    print(f"USO: python {sys.argv[0]} <puerto> [ambiental|acelerometro]")
+if len(sys.argv) < 1:
+    print(f"USO: python {sys.argv[0]} [ambiental|acelerometro]")
     exit(1)
 
-port = sys.argv[1]
+port = "/dev/ttyUSB0"
 
 # Capturamos el filtro si el usuario lo proporciona (por defecto "ambos")
-filtro = sys.argv[2].lower() if len(sys.argv) > 2 else "ambos"
+filtro = sys.argv[1].lower() if len(sys.argv) > 1 else "ambos"
 
 with serial.Serial(port, baudrate=115200, timeout=0.1) as com:
     buf = bytearray()
@@ -52,9 +53,12 @@ with serial.Serial(port, baudrate=115200, timeout=0.1) as com:
             del buf[:HEADER_LEN + data_len]
 
             values = struct.unpack(f"<{float_num}f", data)
-            
+
+
+            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+
             # Filtramos la salida en base al argumento y al número de floats
             if float_num == 3 and (filtro in ["acelerometro", "ambos"]):
-                print(f"[ACELERÓMETRO] X: {values[0]:.3f} g | Y: {values[1]:.3f} g | Z: {values[2]:.3f} g")
+                print(f"[{timestamp}] [ACELERÓMETRO] X: {values[0]:.3f} g | Y: {values[1]:.3f} g | Z: {values[2]:.3f} g")
             elif float_num == 2 and (filtro in ["ambiental", "ambos"]):
-                print(f"[AMBIENTALES]  Temp: {values[0]:.1f} °C | Humedad: {values[1]:.0f} %")
+                print(f"[{timestamp}] [AMBIENTALES]  Temp: {values[0]:.1f} °C | Humedad: {values[1]:.0f} %")
