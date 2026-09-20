@@ -26,6 +26,10 @@ static Acelerometro3Axial acc;
 static SensorAmbientales sensor_env;
 static SemaphoreHandle_t config_mutex;
 
+// Control de transmisión por software
+static bool streaming_activo = false;
+
+
 // Función auxiliar para empaquetar y enviar floats
 void enviar_datos_binarios(float* values, uint16_t float_num) {
     uint8_t buf[PACKET_MAX_LEN];
@@ -53,16 +57,17 @@ void task_acelerometro(void *pvParameters) {
         int64_t now_us = esp_timer_get_time();
 
         xSemaphoreTake(config_mutex, portMAX_DELAY);
+        bool activo = streaming_activo;
         bool new_x = acelerometro_procesar_eje(&acc.x, now_us, &val_x);
         bool new_y = acelerometro_procesar_eje(&acc.y, now_us, &val_y);
         bool new_z = acelerometro_procesar_eje(&acc.z, now_us, &val_z);
         xSemaphoreGive(config_mutex);
 
-        if (new_x && new_y && new_z) {
+        if (activo && new_x && new_y && new_z) {
             values[0] = val_x;
             values[1] = val_y;
             values[2] = val_z;
-            enviar_datos_binarios(values, 3); // Enviamos 3 floats
+            enviar_datos_binarios(values, 3);
         }
         vTaskDelay(pdMS_TO_TICKS(1));
     }
@@ -77,10 +82,11 @@ void task_ambientales(void *pvParameters) {
         int64_t now_us = esp_timer_get_time();
 
         xSemaphoreTake(config_mutex, portMAX_DELAY);
+        bool activo = streaming_activo;
         bool new_data = varAmbientales_procesar(&sensor_env, now_us, &temp, &humedad);
         xSemaphoreGive(config_mutex);
 
-        if (new_data) {
+        if (activo && new_data) {
             values[0] = temp;
             values[1] = humedad;
             enviar_datos_binarios(values, 2); // Enviamos 2 floats
@@ -96,39 +102,60 @@ void task_uart_rx(void *pvParameters) {
         int len = uart_read_bytes(UART_PORT_NUM, data, BUF_SIZE - 1, pdMS_TO_TICKS(50));
         if (len > 0) {
             data[len] = '\0';
-            
-            
-            if (strncmp((char*)data, "SET_ACC", 7) == 0) {
-                char eje; int func, amp, fs;
-                if (sscanf((char*)data, "SET_ACC, %c, %d, %d, %d", &eje, &func, &amp, &fs) == 4) {
-                    EjeAcelerometro *target = NULL;
 
-                    // Convierte el carácter a mayúscula 
-                    switch (toupper((unsigned char)eje)) {
-                        case 'X': target = &acc.x; break;
-                        case 'Y': target = &acc.y; break;
-                        case 'Z': target = &acc.z; break;
-                        default:  target = NULL;   break; // Ignora caracteres no válidos
+            char *line = strtok((char*)data, "\r\n");
+            while (line != NULL) {
+                // Comando START
+                if (strncmp((char*)data, "START", 5) == 0) {
+                    xSemaphoreTake(config_mutex, portMAX_DELAY);
+                    streaming_activo = true;
+                    xSemaphoreGive(config_mutex);
+                    printf("Transmisión activada\n");
+                }
+
+                // Comando STOP
+                else if (strncmp((char*)data, "STOP", 4) == 0) {
+                    xSemaphoreTake(config_mutex, portMAX_DELAY);
+                    streaming_activo = false;
+                    xSemaphoreGive(config_mutex);
+                    printf("Transmisión pausada\n");
+                }
+
+                // Comando SET_ACC
+                else if (strncmp((char*)data, "SET_ACC", 7) == 0) {
+                    char eje; int func, amp, fs;
+                    if (sscanf((char*)data, "SET_ACC, %c, %d, %d, %d", &eje, &func, &amp, &fs) == 4) {
+                        EjeAcelerometro *target = NULL;
+
+                        // Convierte el carácter a mayúscula 
+                        switch (toupper((unsigned char)eje)) {
+                            case 'X': target = &acc.x; break;
+                            case 'Y': target = &acc.y; break;
+                            case 'Z': target = &acc.z; break;
+                            default:  target = NULL;   break; // Ignora caracteres no válidos
+                        }
+
+                        // Solo aplica los cambios si el eje fue reconocido correctamente
+                        if (target != NULL) {
+                            xSemaphoreTake(config_mutex, portMAX_DELAY);
+                            target->funcion = func;
+                            target->A = (float)amp;
+                            target->fs = fs;
+                            xSemaphoreGive(config_mutex);
+                        }
                     }
+                }
 
-                    // Solo aplica los cambios si el eje fue reconocido correctamente
-                    if (target != NULL) {
+                // Comando SET_ENV
+                else if (strncmp((char*)data, "SET_ENV", 7) == 0) {
+                    int intervalo;
+                    if (sscanf((char*)data, "SET_ENV, %d", &intervalo) == 1) {
                         xSemaphoreTake(config_mutex, portMAX_DELAY);
-                        target->funcion = func;
-                        target->A = (float)amp;
-                        target->fs = fs;
+                        varAmbientales_set_intervalo(&sensor_env, intervalo);
                         xSemaphoreGive(config_mutex);
                     }
                 }
-            }
-            // Comando SET_ENV
-            else if (strncmp((char*)data, "SET_ENV", 7) == 0) {
-                int intervalo;
-                if (sscanf((char*)data, "SET_ENV, %d", &intervalo) == 1) {
-                    xSemaphoreTake(config_mutex, portMAX_DELAY);
-                    varAmbientales_set_intervalo(&sensor_env, intervalo);
-                    xSemaphoreGive(config_mutex);
-                }
+                line = strtok(NULL, "\r\n");
             }
         }
 

@@ -77,7 +77,14 @@ class LivePlot(FigureCanvas):
     def clear(self):
         self.x_data.clear()
         self.y_data.clear()
-        self.line.set_data([], [])
+
+        if self.is_ambiente:
+            self.y_data_hum.clear()
+            self.line_temp.set_data([], [])
+            self.line_hum.set_data([], [])
+        else:
+            self.line.set_data([], [])
+
         self.draw_idle()
 
 class DataReceiver(QObject):
@@ -267,8 +274,11 @@ class AppWindow(QMainWindow):
         print(f"conectando al puerto {puerto} a {baudrate} baudios")
 
     def stop_connection(self):
-        if self.receiver:
-            self.receiver.stop() # se rompe el ciclo del while true receptor
+        if self.receiver and self.thread.isRunning():
+            self.receiver.send_command("STOP\n")   # <-- Pausa la ESP32 antes de cerrar
+            QThread.msleep(50)
+            self.receiver.stop()
+
         if self.thread.isRunning():
             self.thread.quit() # se cierra el hilo (se lo pide al hilo de Qt)
             self.thread.wait() # esperamos a que termine de cerrarse
@@ -311,12 +321,48 @@ class AppWindow(QMainWindow):
         self.plot_z.clear()
         self.plot_ambiente.clear()
 
-        # Reiniciar a valores por defecto
+        # Lista de controles para bloquear temporalmente sus señales
+        # (Así evitamos que cada cambio individual dispare llamadas repetidas a la UART)
+        widgets = [
+            self.ui.combo_func_x, self.ui.combo_amp_x, self.ui.combo_freq_x,
+            self.ui.combo_func_y, self.ui.combo_amp_y, self.ui.combo_freq_y,
+            self.ui.combo_func_z, self.ui.combo_amp_z, self.ui.combo_freq_z,
+            self.ui.radioButton
+        ]
+        for w in widgets:
+            w.blockSignals(True)
+
+        # 1. Actualizar los valores en pantalla para el usuario (Armónica Simple, Amplitud 4, Frecuencia 100)
+        # Eje X 
+        self.ui.combo_func_x.setCurrentIndex(1)
+        self.ui.combo_amp_x.setCurrentText("4")
+        self.ui.combo_freq_x.setCurrentText("100")
+
+        # Eje Y 
+        self.ui.combo_func_y.setCurrentIndex(1)
+        self.ui.combo_amp_y.setCurrentText("4")
+        self.ui.combo_freq_y.setCurrentText("100")
+
+        # Eje Z
+        self.ui.combo_func_z.setCurrentIndex(1)
+        self.ui.combo_amp_z.setCurrentText("4")
+        self.ui.combo_freq_z.setCurrentText("100")
+
+        # Intervalo ambiental a 30s
+        self.ui.radioButton.setChecked(True)
+
+        # Reactivar las señales de los controles
+        for w in widgets:
+            w.blockSignals(False)
+
+        # 2. Enviar la configuración inicial a la ESP32
         if self.receiver and self.thread.isRunning():
+            self.receiver.send_command("START\n")
             self.receiver.send_command("SET_ACC,X,1,4,100\n")
             self.receiver.send_command("SET_ACC,Y,1,4,100\n")
             self.receiver.send_command("SET_ACC,Z,1,4,100\n")
             self.receiver.send_command("SET_ENV,30\n")
+            
 
     def update_env_config(self, intervalo_s):
         if self.receiver and self.thread.isRunning():
