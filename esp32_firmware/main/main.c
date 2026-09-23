@@ -63,7 +63,7 @@ void task_acelerometro(void *pvParameters) {
         bool new_z = acelerometro_procesar_eje(&acc.z, now_us, &val_z);
         xSemaphoreGive(config_mutex);
 
-        if (activo && new_x && new_y && new_z) {
+        if (activo && (new_x || new_y || new_z)) {
             values[0] = val_x;
             values[1] = val_y;
             values[2] = val_z;
