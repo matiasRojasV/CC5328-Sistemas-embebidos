@@ -50,8 +50,12 @@ python -m venv .venv
 ## en linux (creo)
 python3 -m venv .venv
 
-# Activar entorno virtual 
-. .venv/bin/activate  
+
+# Activar entorno virtual (linux)
+gui_python\.venv\Scripts\activate  
+
+# Activar entorno virtual (linux)
+gui_python/.venv/bin/activate  
 
 # Instalacion de dependencias
 pip install -r gui_python/requirements.txt
