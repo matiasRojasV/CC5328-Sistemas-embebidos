@@ -1,6 +1,6 @@
 # CC5328-Sistemas-embebidos
 
-Repositorio del ramo ordenado por módulos. 
+Repositorio del ramo ordenado por módulos. \
 Integrantes: Samuel Romero, Matias Rojas
 
 ## Estructura principal
