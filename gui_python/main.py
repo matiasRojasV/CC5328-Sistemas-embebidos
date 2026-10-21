@@ -1,0 +1,377 @@
+import sys
+import threading
+import random
+import time
+import serial
+import struct
+from collections import deque
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
+from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal, pyqtSlot
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+
+# importamos la cascara hecha en pyside6 + pyuic6
+from interfaz_v1_ui import Ui_MainWindow
+
+class LivePlot(FigureCanvas):
+    def __init__(self, max_points: int = 100, title= "Grafico", parent=None, fps = 30, is_ambiente = False):
+
+        fig = Figure(figsize=(3, 2), dpi=100)
+        self.axes = fig.add_subplot(111)
+
+        fig.tight_layout(pad=1.5) # para qe nose corten los titulos y etiquetas del grafico
+
+        super().__init__(fig)
+
+        self.setParent(parent)
+        self.axes.set_title(title, fontsize=9)
+        self.axes.tick_params(axis='both', labelsize=8)
+
+        # estructura de deque para que se vayan borrando los datos mas viejos
+        self.max_points = max_points
+        self.x_data = deque(maxlen=max_points)
+        self.y_data = deque(maxlen=max_points)
+
+        self.is_ambiente = is_ambiente # variable para saber si es referente al grafico de temperatura/humedad
+
+        # inicializamos el grafico
+
+        if self.is_ambiente: # si es el de ambiente, creamos un grafico con una segunda linea para la humedad
+            self.y_data_hum = deque(maxlen=max_points) #una cola extra para los datos de la humedad
+            self.line_temp, = self.axes.plot([], [], 'g-', label='Temp (°C)')
+            self.line_hum, = self.axes.plot([], [], 'b-', label='Hum (%)')
+            self.axes.legend(loc='upper left', fontsize=7)
+
+        else:
+            self.line, = self.axes.plot([], [], 'r-')
+
+        #aplicamos la tasa de refresco del grafico
+        self.drawing_timer = QTimer(self)
+        self.drawing_timer.timeout.connect(self.update_canvas)
+        self.drawing_timer.start(fps)
+
+    def add_point(self, x, y, y_hum = None):
+        self.x_data.append(x)
+        self.y_data.append(y)
+
+        if self.is_ambiente:
+
+            #actualizamos linea de temperatura
+            self.line_temp.set_data(self.x_data, self.y_data)
+
+            if y_hum is not None: # si se recibe el dato de humedad, lo agregamos a la segunda linea
+                self.y_data_hum.append(y_hum)
+                self.line_hum.set_data(self.x_data, self.y_data_hum)
+
+        else:
+            self.line.set_data(self.x_data, self.y_data)
+
+        # ajustamos los limites del grafico de forma dinamica
+        self.axes.relim()
+        self.axes.autoscale_view()
+
+    def update_canvas(self):
+        #usamos la funcion draw_idle para que no se bloquee la interfaz (es una funncion de matplotlib para redibujar mas facil)
+        self.draw_idle()
+
+    def clear(self):
+        self.x_data.clear()
+        self.y_data.clear()
+
+        if self.is_ambiente:
+            self.y_data_hum.clear()
+            self.line_temp.set_data([], [])
+            self.line_hum.set_data([], [])
+        else:
+            self.line.set_data([], [])
+
+        self.draw_idle()
+
+class DataReceiver(QObject):
+
+    #definimo una señal por cada posible dato para avisarle a la GUI que llegaron datos
+    accel_received = pyqtSignal(float, float, float)  # Señal para aceleración (x, y, z)
+    env_received = pyqtSignal(float, float)  # Señal para temperatura y humedad
+    error_received = pyqtSignal(str)  # Señal para errores de lectura
+
+    def __init__(self, port, baudrate=115200):
+        super().__init__()
+        self.port = port
+        self.baudrate = baudrate
+        self.running = True
+        self.serial_conn = None
+
+    @pyqtSlot()
+    def receiver_loop(self):
+        # -- Modo simulador --
+        if self.port == "SIMULADOR":
+            print("Iniciando modo simulador sin hardware...")
+            while self.running:
+                self.accel_received.emit(random.uniform(-4, 4), random.uniform(-4, 4), random.uniform(-4, 4))
+                self.env_received.emit(random.uniform(15.0, 30.0), random.uniform(20.0, 40.0))
+                time.sleep(0.033)
+            return
+
+        # -- Modo real --
+        MARKER = b"<{DP}>"
+        HEADER_LEN = len(MARKER) + 2
+
+        try:
+            #abrimos el puerto serial 
+            self.serial_conn = serial.Serial(self.port, self.baudrate)
+            buf = bytearray()
+
+            # leemos los datos del puerto serial en el while
+            while self.running:
+                chunk = self.serial_conn.read(4096)
+                if not chunk:
+                    continue
+                buf += chunk
+
+                while True: #desempaquetamos la info que viene
+                    start = buf.find(MARKER)
+                    if start < 0:
+                        cut = max(0, len(buf) - len(MARKER))
+                        del buf[:cut]
+                        break
+                    if start > 0:
+                        del buf[:start]
+                    if len(buf) < HEADER_LEN:
+                        break
+
+                    float_num, = struct.unpack_from("<H", buf, len(MARKER))
+                    data_len = float_num * 4
+                    if len(buf) < HEADER_LEN + data_len:
+                        break
+
+                    data = buf[HEADER_LEN:HEADER_LEN + data_len]
+                    values = struct.unpack(f"<{float_num}f", data)
+
+                    del buf[:HEADER_LEN + data_len]
+
+                    # enviamos las señales de los datos correspondientes a los graficos segun la cantidad de valores recibidos
+                    if float_num == 3: # si se reciben 3 valores son datos del acelerometro
+                        self.accel_received.emit(values[0], values[1], values[2])
+                    elif float_num == 2: # si son 2 valores son datos de temperatura y humedad
+                        self.env_received.emit(values[0], values[1])
+
+        except Exception as e:
+            self.error_received.emit(str(e))
+        finally:
+            if self.serial_conn and self.serial_conn.is_open:
+                self.serial_conn.close()
+            print("conexion detenida")
+
+    @pyqtSlot(str)
+    def send_command(self, command_str: str):
+        if self.serial_conn and self.serial_conn.is_open:
+
+            try:
+                self.serial_conn.write(command_str.encode('utf-8'))
+                print(f"Comando enviado: {command_str.strip()}")
+            except Exception as e:
+                self.error_received.emit(f"Error al enviar: {str(e)}")
+
+    def stop(self):
+        self.running = False
+
+class AppWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        # inicializamos la interfaz hecha con qtdesigner
+        self.ui = Ui_MainWindow()
+        self.ui.setupUi(self)
+
+        # agregamos puertos seriales de prueba para windows
+        self.ui.comboBox_puerto.addItems(["SIMULADOR","COM3", "COM4"])
+        # Agregamos puertos seriales de prueba para Linux
+        self.ui.comboBox_puerto.addItems(["/dev/ttyUSB0"]) 
+        
+        #creamos las instancias de los graficos dinamicos del acelerometro
+        self.plot_x = LivePlot(title="Aceleracion Eje X")
+        self.plot_y = LivePlot(title="Aceleracion Eje Y")
+        self.plot_z = LivePlot(title="Aceleracion Eje Z")
+        self.plot_ambiente = LivePlot(title="Historial Temperatura/Humedad", is_ambiente=True) #grafico de temperatura y humedad
+
+        # incrustamos las instacias recien creadas en los layouts vacios de la interfaz
+        self.ui.layout_x.addWidget(self.plot_x)
+        self.ui.layout_y.addWidget(self.plot_y)
+        self.ui.layout_z.addWidget(self.plot_z)
+        self.ui.layout_ambiente.addWidget(self.plot_ambiente)
+
+        self.thread = QThread()
+        self.receiver = None
+        self.init_time = time.time()
+
+        self.ui.btn_conectar.clicked.connect(self.start_connection)
+        self.ui.btn_desconectar.clicked.connect(self.stop_connection)
+        self.ui.btn_inicializar.clicked.connect(self.inicializar_esp32) 
+
+        self.ui.radioButton.toggled.connect(lambda checked: self.update_env_config(30) if checked else None)  
+        self.ui.radioButton_2.toggled.connect(lambda checked: self.update_env_config(60) if checked else None)
+
+        self.ui.combo_func_x.currentIndexChanged.connect(lambda: self.update_esp32_config('X'))
+        self.ui.combo_amp_x.currentTextChanged.connect(lambda: self.update_esp32_config('X'))
+        self.ui.combo_freq_x.currentTextChanged.connect(lambda: self.update_esp32_config('X'))
+
+        self.ui.combo_func_y.currentIndexChanged.connect(lambda: self.update_esp32_config('Y'))
+        self.ui.combo_amp_y.currentTextChanged.connect(lambda: self.update_esp32_config('Y'))
+        self.ui.combo_freq_y.currentTextChanged.connect(lambda: self.update_esp32_config('Y'))
+
+        self.ui.combo_func_z.currentIndexChanged.connect(lambda: self.update_esp32_config('Z'))
+        self.ui.combo_amp_z.currentTextChanged.connect(lambda: self.update_esp32_config('Z'))
+        self.ui.combo_freq_z.currentTextChanged.connect(lambda: self.update_esp32_config('Z'))
+
+    @pyqtSlot(float, float, float)
+    def update_accel(self, x, y, z):
+        # tiempo desde la conexion
+        current_time = time.time() - self.init_time
+
+        # enviar datos
+        self.plot_x.add_point(current_time, x)
+        self.plot_y.add_point(current_time, y)
+        self.plot_z.add_point(current_time, z)
+
+    @pyqtSlot(float, float)
+    def update_env(self, temp, hum):
+        # tiempo desde la conexion
+        current_time = time.time() - self.init_time
+
+        self.plot_ambiente.add_point(current_time, temp, hum) #graficamos la temperatura y la humedad
+
+        #actualizamos las cajas LCD de la interfaz
+        self.ui.lcdNumber_temp.display(temp)
+        self.ui.lcdNumber_hum.display(hum)
+
+    def start_connection(self):
+        # si ya hay un hilo de conexion corriendo, no hacemos nada
+        if self.thread.isRunning():
+            return
+
+        #capturamos los datos de la conexion de la GUI
+        try:
+            puerto = self.ui.comboBox_puerto.currentText()
+            baudrate = int(self.ui.comboBox_baudrate.currentText())
+        except ValueError:
+            print("Error: valores de conexión inválidos")
+            return
+
+        #reiniciamos el tiempo de los graficos
+        self.init_time = time.time()
+
+        # creamos el receptor y lo movemos a un hilo aparte (secundario)
+        self.receiver = DataReceiver(port= puerto, baudrate=baudrate)
+        self.receiver.moveToThread(self.thread)
+
+        #conectamos la señales para iniciar el loop y comenzar a recibir los datos
+        self.thread.started.connect(self.receiver.receiver_loop)
+        self.receiver.accel_received.connect(self.update_accel)
+        self.receiver.env_received.connect(self.update_env)
+
+        # iniciamos el hilo
+        self.thread.start()
+
+        print(f"conectando al puerto {puerto} a {baudrate} baudios")
+
+    def stop_connection(self):
+        if self.receiver and self.thread.isRunning():
+            self.receiver.send_command("STOP\n")   # <-- Pausa la ESP32 antes de cerrar
+            QThread.msleep(50)
+            self.receiver.stop()
+
+        if self.thread.isRunning():
+            self.thread.quit() # se cierra el hilo (se lo pide al hilo de Qt)
+            self.thread.wait() # esperamos a que termine de cerrarse
+            print("conexion detenida")
+
+    def update_esp32_config(self, eje):
+        # no enviar comando si no estamos conectados
+        if not self.receiver or not self.thread.isRunning():
+            return
+
+        # dependiendo del eje modificado, se lee lo que tienen los controles de los botones de la GUI
+        if eje == "X":
+            func = self.ui.combo_func_x.currentIndex()
+            amp = self.ui.combo_amp_x.currentText()
+            freq = self.ui.combo_freq_x.currentText()
+        elif eje == 'Y':
+            func = self.ui.combo_func_y.currentIndex()
+            amp = self.ui.combo_amp_y.currentText()
+            freq = self.ui.combo_freq_y.currentText()
+        elif eje == 'Z':
+            func = self.ui.combo_func_z.currentIndex()
+            amp = self.ui.combo_amp_z.currentText()
+            freq = self.ui.combo_freq_z.currentText()
+
+        #construimos el comando a enviar al esp32
+        comando = f"SET_ACC,{eje},{func},{amp},{freq}\n"
+        self.receiver.send_command(comando)
+
+
+    def inicializar_esp32(self):
+        # Si el puerto no está abierto, conectar primero
+        if not self.thread.isRunning():
+            self.start_connection()
+            QThread.msleep(150)
+
+        # Reiniciar el tiempo y limpiar los 4 gráficos
+        self.init_time = time.time()
+        self.plot_x.clear()
+        self.plot_y.clear()
+        self.plot_z.clear()
+        self.plot_ambiente.clear()
+
+        # Lista de controles para bloquear temporalmente sus señales
+        # (Así evitamos que cada cambio individual dispare llamadas repetidas a la UART)
+        widgets = [
+            self.ui.combo_func_x, self.ui.combo_amp_x, self.ui.combo_freq_x,
+            self.ui.combo_func_y, self.ui.combo_amp_y, self.ui.combo_freq_y,
+            self.ui.combo_func_z, self.ui.combo_amp_z, self.ui.combo_freq_z,
+            self.ui.radioButton
+        ]
+        for w in widgets:
+            w.blockSignals(True)
+
+        # 1. Actualizar los valores en pantalla para el usuario (Armónica Simple, Amplitud 4, Frecuencia 100)
+        # Eje X 
+        self.ui.combo_func_x.setCurrentIndex(1)
+        self.ui.combo_amp_x.setCurrentText("4")
+        self.ui.combo_freq_x.setCurrentText("100")
+
+        # Eje Y 
+        self.ui.combo_func_y.setCurrentIndex(1)
+        self.ui.combo_amp_y.setCurrentText("4")
+        self.ui.combo_freq_y.setCurrentText("100")
+
+        # Eje Z
+        self.ui.combo_func_z.setCurrentIndex(1)
+        self.ui.combo_amp_z.setCurrentText("4")
+        self.ui.combo_freq_z.setCurrentText("100")
+
+        # Intervalo ambiental a 30s
+        self.ui.radioButton.setChecked(True)
+
+        # Reactivar las señales de los controles
+        for w in widgets:
+            w.blockSignals(False)
+
+        # 2. Enviar la configuración inicial a la ESP32
+        if self.receiver and self.thread.isRunning():
+            self.receiver.send_command("START\n")
+            self.receiver.send_command("SET_ACC,X,1,4,100\n")
+            self.receiver.send_command("SET_ACC,Y,1,4,100\n")
+            self.receiver.send_command("SET_ACC,Z,1,4,100\n")
+            self.receiver.send_command("SET_ENV,30\n")
+            
+
+    def update_env_config(self, intervalo_s):
+        if self.receiver and self.thread.isRunning():
+            comando = f"SET_ENV,{intervalo_s}\n"
+            self.receiver.send_command(comando)
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = AppWindow()
+    window.show()
+    sys.exit(app.exec())
