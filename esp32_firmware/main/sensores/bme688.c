@@ -47,6 +47,7 @@ static double last_temp_comp = 25.0;
 esp_err_t bme688_init(void) {
     esp_err_t err;
 
+    // crear bus I2C em GPIO 15 (SDA) y GPIO 16 (SCL) solo una vez
     if (bus_handle == NULL) {
         i2c_master_bus_config_t bus_config = {
             .i2c_port = I2C_NUM_0,
@@ -58,26 +59,42 @@ esp_err_t bme688_init(void) {
         };
         err = i2c_new_master_bus(&bus_config, &bus_handle);
         if (err != ESP_OK) return err;
+    }
+
+    // detectar automaticamente si el BME688 responde en 0x76 o 0x77
+    if (dev_handle == NULL) {
+
+        uint8_t found_SLV_addr = 0;
+        if (i2c_master_probe(bus_handle, 0x76, I2C_TIMEOUT_MS) == ESP_OK) {
+            found_SLV_addr = 0x76;
+        } else if (i2c_master_probe(bus_handle, 0x77, I2C_TIMEOUT_MS) == ESP_OK) {
+            found_SLV_addr = 0x77;
+        } else { 
+            return ESP_ERR_NOT_FOUND;
+        }
 
         i2c_device_config_t dev_config = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-            .device_address = BME688_I2C_SLAVE_ADDR,
+            .device_address = found_SLV_addr,
             .scl_speed_hz = 400000,
         };
         err = i2c_master_bus_add_device(bus_handle, &dev_config, &dev_handle);
         if (err != ESP_OK) return err;
     }
 
+    // hacemos un soft reset (0xB6 en 0xE0) y espera de 10 ms
     uint8_t buf[2] = {BME688_RESET_ADDR, 0xB6};
     err = i2c_master_transmit(dev_handle, buf, 2, I2C_TIMEOUT_MS);
     if (err != ESP_OK) return err;
     vTaskDelay(pdMS_TO_TICKS(10));
 
+    // verificamos que el chip ID sea correcto (0x61 en 0xD0)
     buf[0] = BME688_CHIP_ID_ADDR;
     uint8_t chip_id = 0;
     err = i2c_master_transmit_receive(dev_handle, buf, 1, &chip_id, 1, I2C_TIMEOUT_MS);
     if (err != ESP_OK || chip_id != BME688_CHIP_ID) return ESP_ERR_INVALID_RESPONSE;
 
+    // leemos los registros de calibración de fábrica
     uint16_t calib_1_w[(BME688_CALIB_1_LEN + 1) / 2];
     uint8_t *calib_1 = (uint8_t *)calib_1_w;
     buf[0] = BME688_CALIB_1_ADDR;
@@ -100,6 +117,7 @@ esp_err_t bme688_init(void) {
     par_h3 = calib_2[3]; par_h4 = calib_2[4]; par_h5 = calib_2[5];
     par_h6 = calib_2[6]; par_h7 = calib_2[7];
 
+    // desactivamos el filtro IIR y el control de gas
     buf[0] = BME688_CONFIG_ADDR; buf[1] = 0x00;
     i2c_master_transmit(dev_handle, buf, 2, I2C_TIMEOUT_MS);
 
