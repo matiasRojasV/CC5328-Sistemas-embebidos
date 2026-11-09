@@ -43,7 +43,7 @@ with serial.Serial(PORT, baudrate=BAUDRATE, timeout=0.1) as com:
                 line = line.strip()
 
                 # buscamos el marcador <{DP}> para ignorar los logs de arranque de ESP-IDF
-                idx = line.find(MARKER)
+                idx = line.find(MARKER.decode())
                 if idx < 0:
                     continue
 
