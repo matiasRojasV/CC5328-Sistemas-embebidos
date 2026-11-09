@@ -9,3 +9,6 @@ ENV/
 # cache de python
 **/__pycache__/
 *.pyc
+
+# cache de vscode
+**/.vscode/
