@@ -12,3 +12,9 @@ ENV/
 
 # cache de vscode
 **/.vscode/
+
+# Caché local de indexación de clangd
+.clangd/
+
+# Base de datos de compilación (se genera localmente por CMake/Make)
+compile_commands.json
