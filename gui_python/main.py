@@ -1,373 +1,515 @@
+import math
+import queue
 import sys
-import threading
-import random
 import time
-import serial
-import struct
 from collections import deque
-from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
-from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal, pyqtSlot
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+
+import serial
+from serial.tools import list_ports
+from PyQt6.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-# importamos la cascara hecha en pyside6 + pyuic6
-from interfaz_v1_ui import Ui_MainWindow
+from interfaz_v2_ui import Ui_MainWindow
 
-class LivePlot(FigureCanvas):
-    def __init__(self, max_points: int = 100, title= "Grafico", parent=None, fps = 30, is_ambiente = False):
 
-        fig = Figure(figsize=(3, 2), dpi=100)
-        self.axes = fig.add_subplot(111)
+MARKER = "<{DP}>"
+MAX_PLOT_POINTS = 300
+USB_SERIAL_VIDS = {0x0403, 0x10C4, 0x1A86, 0x303A}
+USB_SERIAL_KEYWORDS = (
+    "esp32",
+    "cp210",
+    "ch340",
+    "ch910",
+    "ftdi",
+    "silicon labs",
+    "usb serial",
+    "usb jtag",
+    "usb-uart",
+    "usb uart",
+)
 
-        fig.tight_layout(pad=1.5) # para qe nose corten los titulos y etiquetas del grafico
 
-        super().__init__(fig)
+def parse_packet(line):
+    """Parse one protocol line into its message type and key/value fields."""
+    marker_index = line.find(MARKER)
+    if marker_index < 0:
+        return None, {}
 
-        self.setParent(parent)
-        self.axes.set_title(title, fontsize=9)
-        self.axes.tick_params(axis='both', labelsize=8)
+    parts = line[marker_index + len(MARKER):].strip().split(",")
+    if not parts or not parts[0]:
+        return None, {}
 
-        # estructura de deque para que se vayan borrando los datos mas viejos
-        self.max_points = max_points
-        self.x_data = deque(maxlen=max_points)
-        self.y_data = deque(maxlen=max_points)
+    fields = {}
+    for item in parts[1:]:
+        if "=" in item:
+            key, value = item.split("=", 1)
+            fields[key.strip()] = value.strip()
+    return parts[0].strip(), fields
 
-        self.is_ambiente = is_ambiente # variable para saber si es referente al grafico de temperatura/humedad
 
-        # inicializamos el grafico
+class SerialWorker(QObject):
+    connected = pyqtSignal(str)
+    disconnected = pyqtSignal()
+    packet_received = pyqtSignal(str, dict)
+    error_received = pyqtSignal(str)
+    finished = pyqtSignal()
 
-        if self.is_ambiente: # si es el de ambiente, creamos un grafico con una segunda linea para la humedad
-            self.y_data_hum = deque(maxlen=max_points) #una cola extra para los datos de la humedad
-            self.line_temp, = self.axes.plot([], [], 'g-', label='Temp (°C)')
-            self.line_hum, = self.axes.plot([], [], 'b-', label='Hum (%)')
-            self.axes.legend(loc='upper left', fontsize=7)
-
-        else:
-            self.line, = self.axes.plot([], [], 'r-')
-
-        #aplicamos la tasa de refresco del grafico
-        self.drawing_timer = QTimer(self)
-        self.drawing_timer.timeout.connect(self.update_canvas)
-        self.drawing_timer.start(fps)
-
-    def add_point(self, x, y, y_hum = None):
-        self.x_data.append(x)
-        self.y_data.append(y)
-
-        if self.is_ambiente:
-
-            #actualizamos linea de temperatura
-            self.line_temp.set_data(self.x_data, self.y_data)
-
-            if y_hum is not None: # si se recibe el dato de humedad, lo agregamos a la segunda linea
-                self.y_data_hum.append(y_hum)
-                self.line_hum.set_data(self.x_data, self.y_data_hum)
-
-        else:
-            self.line.set_data(self.x_data, self.y_data)
-
-        # ajustamos los limites del grafico de forma dinamica
-        self.axes.relim()
-        self.axes.autoscale_view()
-
-    def update_canvas(self):
-        #usamos la funcion draw_idle para que no se bloquee la interfaz (es una funncion de matplotlib para redibujar mas facil)
-        self.draw_idle()
-
-    def clear(self):
-        self.x_data.clear()
-        self.y_data.clear()
-
-        if self.is_ambiente:
-            self.y_data_hum.clear()
-            self.line_temp.set_data([], [])
-            self.line_hum.set_data([], [])
-        else:
-            self.line.set_data([], [])
-
-        self.draw_idle()
-
-class DataReceiver(QObject):
-
-    #definimo una señal por cada posible dato para avisarle a la GUI que llegaron datos
-    accel_received = pyqtSignal(float, float, float)  # Señal para aceleración (x, y, z)
-    env_received = pyqtSignal(float, float)  # Señal para temperatura y humedad
-    error_received = pyqtSignal(str)  # Señal para errores de lectura
-
-    def __init__(self, port, baudrate=115200):
+    def __init__(self, port, baudrate):
         super().__init__()
         self.port = port
         self.baudrate = baudrate
-        self.running = True
-        self.serial_conn = None
+        self.commands = queue.Queue()
+        self.stop_requested = False
 
-    @pyqtSlot()
-    def receiver_loop(self):
-        # -- Modo simulador --
-        if self.port == "SIMULADOR":
-            print("Iniciando modo simulador sin hardware...")
-            while self.running:
-                self.accel_received.emit(random.uniform(-4, 4), random.uniform(-4, 4), random.uniform(-4, 4))
-                self.env_received.emit(random.uniform(15.0, 30.0), random.uniform(20.0, 40.0))
-                time.sleep(0.033)
-            return
+    def send_command(self, command):
+        self.commands.put(command)
 
-        # -- Modo real --
-        MARKER = b"<{DP}>"
-        HEADER_LEN = len(MARKER) + 2
+    def request_stop(self):
+        self.stop_requested = True
 
+    def run(self):
+        connection = None
         try:
-            #abrimos el puerto serial 
-            self.serial_conn = serial.Serial(self.port, self.baudrate)
-            buf = bytearray()
+            connection = serial.Serial(
+                self.port,
+                baudrate=self.baudrate,
+                timeout=0.1,
+                write_timeout=1,
+            )
+            self.connected.emit(f"Conectado a {self.port} ({self.baudrate} baudios)")
+            buffer = bytearray()
 
-            # leemos los datos del puerto serial en el while
-            while self.running:
-                chunk = self.serial_conn.read(4096)
+            while not self.stop_requested:
+                while True:
+                    try:
+                        command = self.commands.get_nowait()
+                    except queue.Empty:
+                        break
+                    connection.write(command.encode("ascii"))
+
+                chunk = connection.read(1024)
                 if not chunk:
                     continue
-                buf += chunk
+                buffer.extend(chunk)
 
-                while True: #desempaquetamos la info que viene
-                    start = buf.find(MARKER)
-                    if start < 0:
-                        cut = max(0, len(buf) - len(MARKER))
-                        del buf[:cut]
-                        break
-                    if start > 0:
-                        del buf[:start]
-                    if len(buf) < HEADER_LEN:
-                        break
+                while b"\n" in buffer:
+                    raw_line, _, remainder = buffer.partition(b"\n")
+                    buffer = bytearray(remainder)
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    message_type, fields = parse_packet(line)
+                    if message_type is not None:
+                        self.packet_received.emit(message_type, fields)
 
-                    float_num, = struct.unpack_from("<H", buf, len(MARKER))
-                    data_len = float_num * 4
-                    if len(buf) < HEADER_LEN + data_len:
-                        break
-
-                    data = buf[HEADER_LEN:HEADER_LEN + data_len]
-                    values = struct.unpack(f"<{float_num}f", data)
-
-                    del buf[:HEADER_LEN + data_len]
-
-                    # enviamos las señales de los datos correspondientes a los graficos segun la cantidad de valores recibidos
-                    if float_num == 3: # si se reciben 3 valores son datos del acelerometro
-                        self.accel_received.emit(values[0], values[1], values[2])
-                    elif float_num == 2: # si son 2 valores son datos de temperatura y humedad
-                        self.env_received.emit(values[0], values[1])
-
-        except Exception as e:
-            self.error_received.emit(str(e))
+            connection.write(b"STOP\n")
+        except (serial.SerialException, OSError, UnicodeError) as error:
+            self.error_received.emit(f"Error serial: {error}")
         finally:
-            if self.serial_conn and self.serial_conn.is_open:
-                self.serial_conn.close()
-            print("conexion detenida")
-
-    @pyqtSlot(str)
-    def send_command(self, command_str: str):
-        if self.serial_conn and self.serial_conn.is_open:
-
             try:
-                self.serial_conn.write(command_str.encode('utf-8'))
-                print(f"Comando enviado: {command_str.strip()}")
-            except Exception as e:
-                self.error_received.emit(f"Error al enviar: {str(e)}")
+                if connection is not None and connection.is_open:
+                    connection.close()
+            except (serial.SerialException, OSError) as error:
+                self.error_received.emit(f"Error al cerrar el puerto serial: {error}")
+            finally:
+                self.disconnected.emit()
+                self.finished.emit()
 
-    def stop(self):
-        self.running = False
+
+class HistoryPlot(FigureCanvas):
+    def __init__(self, title, unit, color, parent=None):
+        figure = Figure(figsize=(4, 2.4), dpi=100)
+        self.axes = figure.add_subplot(111)
+        super().__init__(figure)
+        self.setParent(parent)
+        self.axes.set_title(title)
+        self.axes.set_xlabel("Tiempo desde inicio (s)")
+        self.axes.set_ylabel(unit)
+        self.axes.grid(True, alpha=0.3)
+        self.line, = self.axes.plot([], [], color=color)
+        self.times = deque(maxlen=MAX_PLOT_POINTS)
+        self.values = deque(maxlen=MAX_PLOT_POINTS)
+
+    def add_point(self, timestamp, value):
+        self.times.append(timestamp)
+        self.values.append(value)
+        self.line.set_data(self.times, self.values)
+        self.axes.relim()
+        self.axes.autoscale_view()
+        self.draw_idle()
+
+    def clear(self):
+        self.times.clear()
+        self.values.clear()
+        self.line.set_data([], [])
+        self.draw_idle()
+
 
 class AppWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        # inicializamos la interfaz hecha con qtdesigner
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
+        self.worker = None
+        self.serial_thread = None
+        self.last_sample_time = None
+        self.last_sample_timestamp = 0.0
+        self.sample_count = 0
 
-        # agregamos puertos seriales de prueba para windows
-        self.ui.comboBox_puerto.addItems(["SIMULADOR","COM3", "COM4"])
-        # Agregamos puertos seriales de prueba para Linux
-        self.ui.comboBox_puerto.addItems(["/dev/ttyUSB0"]) 
-        
-        #creamos las instancias de los graficos dinamicos del acelerometro
-        self.plot_x = LivePlot(title="Aceleracion Eje X")
-        self.plot_y = LivePlot(title="Aceleracion Eje Y")
-        self.plot_z = LivePlot(title="Aceleracion Eje Z")
-        self.plot_ambiente = LivePlot(title="Historial Temperatura/Humedad", is_ambiente=True) #grafico de temperatura y humedad
+        self.plot_temperature = HistoryPlot("Temperatura", "°C", "#c0392b")
+        self.plot_humidity = HistoryPlot("Humedad relativa", "%HR", "#2471a3")
+        self.plot_pressure = HistoryPlot("Presión", "hPa", "#148f77")
+        self.ui.temperature_plot_layout.addWidget(self.plot_temperature)
+        self.ui.humidity_plot_layout.addWidget(self.plot_humidity)
+        self.ui.pressure_plot_layout.addWidget(self.plot_pressure)
 
-        # incrustamos las instacias recien creadas en los layouts vacios de la interfaz
-        self.ui.layout_x.addWidget(self.plot_x)
-        self.ui.layout_y.addWidget(self.plot_y)
-        self.ui.layout_z.addWidget(self.plot_z)
-        self.ui.layout_ambiente.addWidget(self.plot_ambiente)
+        self.ui.window_combo.addItems(["5", "10", "30", "60"])
+        self.ui.window_combo.setCurrentText("10")
+        self.ui.frequency_combo.addItems(["0.5", "1.0", "2.0", "5.0"])
+        self.ui.frequency_combo.setCurrentText("1.0")
+        self.ui.baudrate_combo.addItems(["9600", "57600", "115200", "230400"])
+        self.ui.baudrate_combo.setCurrentText("115200")
+        self.ui.threshold_spin.setRange(-40.0, 85.0)
+        self.ui.threshold_spin.setDecimals(1)
+        self.ui.threshold_spin.setSingleStep(0.1)
+        self.ui.threshold_spin.setValue(28.0)
 
-        self.thread = QThread()
-        self.receiver = None
-        self.init_time = time.time()
+        self.ui.refresh_ports_button.clicked.connect(self.refresh_ports)
+        self.ui.usb_filter_check.toggled.connect(self.refresh_ports)
+        self.ui.connect_button.clicked.connect(self.start_connection)
+        self.ui.disconnect_button.clicked.connect(self.stop_connection)
+        self.ui.apply_button.clicked.connect(self.apply_configuration)
+        self.ui.start_button.clicked.connect(lambda: self.send_command("START\n"))
+        self.ui.pause_button.clicked.connect(lambda: self.send_command("STOP\n"))
+        self.ui.temperature_check.toggled.connect(self.update_transmission_indicators)
+        self.ui.humidity_check.toggled.connect(self.update_transmission_indicators)
+        self.ui.pressure_check.toggled.connect(self.update_transmission_indicators)
 
-        self.ui.btn_conectar.clicked.connect(self.start_connection)
-        self.ui.btn_desconectar.clicked.connect(self.stop_connection)
-        self.ui.btn_inicializar.clicked.connect(self.inicializar_esp32) 
+        self.refresh_ports()
+        self.update_transmission_indicators()
+        self.set_connected_state(False)
 
-        self.ui.radioButton.toggled.connect(lambda checked: self.update_env_config(30) if checked else None)  
-        self.ui.radioButton_2.toggled.connect(lambda checked: self.update_env_config(60) if checked else None)
+        self.no_data_timer = QTimer(self)
+        self.no_data_timer.timeout.connect(self.check_data_timeout)
+        self.no_data_timer.start(1000)
 
-        self.ui.combo_func_x.currentIndexChanged.connect(lambda: self.update_esp32_config('X'))
-        self.ui.combo_amp_x.currentTextChanged.connect(lambda: self.update_esp32_config('X'))
-        self.ui.combo_freq_x.currentTextChanged.connect(lambda: self.update_esp32_config('X'))
+    def refresh_ports(self):
+        selected_port = self.ui.port_combo.currentData() or self.ui.port_combo.currentText()
+        self.ui.port_combo.clear()
+        ports = list(list_ports.comports())
+        if self.ui.usb_filter_check.isChecked():
+            ports = [port for port in ports if self.is_likely_esp32_port(port)]
+        for port in ports:
+            description = " ".join(
+                item for item in (port.description, port.manufacturer, port.hwid) if item
+            )
+            self.ui.port_combo.addItem(port.device, userData=port.device)
+            self.ui.port_combo.setItemData(
+                self.ui.port_combo.count() - 1,
+                description,
+                Qt.ItemDataRole.ToolTipRole,
+            )
+        if selected_port:
+            index = self.ui.port_combo.findData(selected_port)
+            if index >= 0:
+                self.ui.port_combo.setCurrentIndex(index)
+        if not ports:
+            if self.ui.usb_filter_check.isChecked():
+                self.ui.connection_status.setText(
+                    "No se encontraron adaptadores USB-serial comunes; desactiva el filtro para ver todos."
+                )
+            else:
+                self.ui.connection_status.setText("No se encontraron puertos seriales")
 
-        self.ui.combo_func_y.currentIndexChanged.connect(lambda: self.update_esp32_config('Y'))
-        self.ui.combo_amp_y.currentTextChanged.connect(lambda: self.update_esp32_config('Y'))
-        self.ui.combo_freq_y.currentTextChanged.connect(lambda: self.update_esp32_config('Y'))
-
-        self.ui.combo_func_z.currentIndexChanged.connect(lambda: self.update_esp32_config('Z'))
-        self.ui.combo_amp_z.currentTextChanged.connect(lambda: self.update_esp32_config('Z'))
-        self.ui.combo_freq_z.currentTextChanged.connect(lambda: self.update_esp32_config('Z'))
-
-    @pyqtSlot(float, float, float)
-    def update_accel(self, x, y, z):
-        # tiempo desde la conexion
-        current_time = time.time() - self.init_time
-
-        # enviar datos
-        self.plot_x.add_point(current_time, x)
-        self.plot_y.add_point(current_time, y)
-        self.plot_z.add_point(current_time, z)
-
-    @pyqtSlot(float, float)
-    def update_env(self, temp, hum):
-        # tiempo desde la conexion
-        current_time = time.time() - self.init_time
-
-        self.plot_ambiente.add_point(current_time, temp, hum) #graficamos la temperatura y la humedad
-
-        #actualizamos las cajas LCD de la interfaz
-        self.ui.lcdNumber_temp.display(temp)
-        self.ui.lcdNumber_hum.display(hum)
+    @staticmethod
+    def is_likely_esp32_port(port):
+        if port.vid in USB_SERIAL_VIDS:
+            return True
+        details = " ".join(
+            item for item in (port.description, port.manufacturer, port.hwid) if item
+        ).lower()
+        return any(keyword in details for keyword in USB_SERIAL_KEYWORDS)
 
     def start_connection(self):
-        # si ya hay un hilo de conexion corriendo, no hacemos nada
-        if self.thread.isRunning():
+        if self.serial_thread is not None:
             return
-
-        #capturamos los datos de la conexion de la GUI
+        port = self.ui.port_combo.currentData() or self.ui.port_combo.currentText()
+        if not port:
+            QMessageBox.warning(self, "Puerto requerido", "Selecciona un puerto serial disponible.")
+            return
         try:
-            puerto = self.ui.comboBox_puerto.currentText()
-            baudrate = int(self.ui.comboBox_baudrate.currentText())
+            baudrate = int(self.ui.baudrate_combo.currentText())
         except ValueError:
-            print("Error: valores de conexión inválidos")
+            QMessageBox.warning(self, "Velocidad inválida", "Selecciona una velocidad serial válida.")
             return
 
-        #reiniciamos el tiempo de los graficos
-        self.init_time = time.time()
-
-        # creamos el receptor y lo movemos a un hilo aparte (secundario)
-        self.receiver = DataReceiver(port= puerto, baudrate=baudrate)
-        self.receiver.moveToThread(self.thread)
-
-        #conectamos la señales para iniciar el loop y comenzar a recibir los datos
-        self.thread.started.connect(self.receiver.receiver_loop)
-        self.receiver.accel_received.connect(self.update_accel)
-        self.receiver.env_received.connect(self.update_env)
-
-        # iniciamos el hilo
-        self.thread.start()
-
-        print(f"conectando al puerto {puerto} a {baudrate} baudios")
+        self.last_sample_time = None
+        self.last_sample_timestamp = 0.0
+        self.sample_count = 0
+        self.clear_measurements()
+        self.update_transmission_indicators()
+        self.serial_thread = QThread(self)
+        self.worker = SerialWorker(port, baudrate)
+        self.worker.moveToThread(self.serial_thread)
+        self.serial_thread.started.connect(self.worker.run)
+        self.worker.connected.connect(self.on_connected)
+        self.worker.disconnected.connect(self.on_disconnected)
+        self.worker.packet_received.connect(self.handle_packet)
+        self.worker.error_received.connect(self.show_error)
+        self.worker.finished.connect(self.serial_thread.quit)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.serial_thread.finished.connect(self.on_thread_finished)
+        self.serial_thread.start()
+        self.ui.connection_status.setText(f"Conectando a {port}...")
+        self.set_connected_state(False, connecting=True)
 
     def stop_connection(self):
-        if self.receiver and self.thread.isRunning():
-            self.receiver.send_command("STOP\n")   # <-- Pausa la ESP32 antes de cerrar
-            QThread.msleep(50)
-            self.receiver.stop()
+        if self.worker is not None:
+            self.worker.request_stop()
+            self.ui.connection_status.setText("Desconectando...")
+            self.set_connected_state(False, connecting=True)
 
-        if self.thread.isRunning():
-            self.thread.quit() # se cierra el hilo (se lo pide al hilo de Qt)
-            self.thread.wait() # esperamos a que termine de cerrarse
-            print("conexion detenida")
+    def on_connected(self, message):
+        self.ui.connection_status.setText(message)
+        self.ui.device_status.setText("Dispositivo conectado; esperando datos")
+        self.last_sample_time = time.monotonic()
+        self.set_connected_state(True)
 
-    def update_esp32_config(self, eje):
-        # no enviar comando si no estamos conectados
-        if not self.receiver or not self.thread.isRunning():
+    def on_disconnected(self):
+        self.set_connected_state(False)
+        self.ui.device_status.setText("Sin conexión")
+        if self.worker is not None and self.worker.stop_requested:
+            self.ui.connection_status.setText("Desconectado")
+        else:
+            self.ui.connection_status.setText("Conexión cerrada")
+
+    def on_thread_finished(self):
+        self.worker = None
+        self.serial_thread = None
+        self.set_connected_state(False)
+
+    def set_connected_state(self, connected, connecting=False):
+        self.ui.connect_button.setEnabled(not connected and not connecting)
+        self.ui.disconnect_button.setEnabled(connected or connecting)
+        self.ui.apply_button.setEnabled(connected)
+        self.ui.start_button.setEnabled(connected)
+        self.ui.pause_button.setEnabled(connected)
+        self.ui.port_combo.setEnabled(not connected and not connecting)
+        self.ui.usb_filter_check.setEnabled(not connected and not connecting)
+        self.ui.baudrate_combo.setEnabled(not connected and not connecting)
+        self.ui.refresh_ports_button.setEnabled(not connected and not connecting)
+
+    def send_command(self, command):
+        if self.worker is None or self.serial_thread is None:
+            self.show_error("No hay una conexión serial activa.")
+            return
+        self.worker.send_command(command)
+        self.add_log(f"TX  {command.strip()}")
+
+    def apply_configuration(self):
+        variables = [
+            ("T", self.ui.temperature_check),
+            ("H", self.ui.humidity_check),
+            ("P", self.ui.pressure_check),
+        ]
+        if not any(control.isChecked() for _, control in variables):
+            QMessageBox.warning(
+                self,
+                "Selección vacía",
+                "Selecciona al menos una variable para transmitir (T, H o P).",
+            )
             return
 
-        # dependiendo del eje modificado, se lee lo que tienen los controles de los botones de la GUI
-        if eje == "X":
-            func = self.ui.combo_func_x.currentIndex()
-            amp = self.ui.combo_amp_x.currentText()
-            freq = self.ui.combo_freq_x.currentText()
-        elif eje == 'Y':
-            func = self.ui.combo_func_y.currentIndex()
-            amp = self.ui.combo_amp_y.currentText()
-            freq = self.ui.combo_freq_y.currentText()
-        elif eje == 'Z':
-            func = self.ui.combo_func_z.currentIndex()
-            amp = self.ui.combo_amp_z.currentText()
-            freq = self.ui.combo_freq_z.currentText()
+        selected = {name: int(control.isChecked()) for name, control in variables}
+        frequency = self.ui.frequency_combo.currentText()
+        avg_enabled = int(self.ui.average_check.isChecked())
+        window_seconds = self.ui.window_combo.currentText()
+        peak_enabled = int(self.ui.peak_check.isChecked())
+        threshold = f"{self.ui.threshold_spin.value():.1f}"
 
-        #construimos el comando a enviar al esp32
-        comando = f"SET_ACC,{eje},{func},{amp},{freq}\n"
-        self.receiver.send_command(comando)
+        self.send_command(
+            f"SET_ACQ,{frequency},{selected['T']},{selected['H']},{selected['P']}\n"
+        )
+        self.send_command(f"SET_AVG,{avg_enabled},{window_seconds}\n")
+        self.send_command(f"SET_PEAK,{peak_enabled},{threshold}\n")
+        self.update_transmission_indicators()
 
+    def update_transmission_indicators(self, *_):
+        for control, indicator, plot in (
+            (self.ui.temperature_check, self.ui.temperature_transmission, self.plot_temperature),
+            (self.ui.humidity_check, self.ui.humidity_transmission, self.plot_humidity),
+            (self.ui.pressure_check, self.ui.pressure_transmission, self.plot_pressure),
+        ):
+            enabled = control.isChecked()
+            indicator.setText("Transmitida" if enabled else "No transmitida")
+            plot.setEnabled(enabled)
+            if not enabled:
+                plot.clear()
 
-    def inicializar_esp32(self):
-        # Si el puerto no está abierto, conectar primero
-        if not self.thread.isRunning():
-            self.start_connection()
-            QThread.msleep(150)
+    def clear_measurements(self):
+        self.ui.temperature_value.setText("--")
+        self.ui.humidity_value.setText("--")
+        self.ui.pressure_value.setText("--")
+        self.ui.average_value.setText("--")
+        self.ui.average_window_status.setText("Sin datos")
+        self.ui.temperature_transmission.setText("Sin datos")
+        self.ui.humidity_transmission.setText("Sin datos")
+        self.ui.pressure_transmission.setText("Sin datos")
+        self.plot_temperature.clear()
+        self.plot_humidity.clear()
+        self.plot_pressure.clear()
+        self.ui.peak_events.clear()
+        self.ui.confirmed_config.setText("Esperando confirmación del dispositivo")
 
-        # Reiniciar el tiempo y limpiar los 4 gráficos
-        self.init_time = time.time()
-        self.plot_x.clear()
-        self.plot_y.clear()
-        self.plot_z.clear()
-        self.plot_ambiente.clear()
+    def handle_packet(self, message_type, fields):
+        if message_type == "SAMPLE":
+            self.handle_sample(fields)
+        elif message_type == "PEAK":
+            self.handle_peak(fields)
+        elif message_type == "ACK":
+            self.handle_ack(fields)
+        elif message_type in ("ERR", "ERROR"):
+            self.show_error(
+                f"Comando rechazado ({fields.get('cmd', 'desconocido')}): "
+                f"{fields.get('msg', 'sin detalle')}"
+            )
+        else:
+            self.add_log(f"RX  Mensaje desconocido: {message_type}")
 
-        # Lista de controles para bloquear temporalmente sus señales
-        # (Así evitamos que cada cambio individual dispare llamadas repetidas a la UART)
-        widgets = [
-            self.ui.combo_func_x, self.ui.combo_amp_x, self.ui.combo_freq_x,
-            self.ui.combo_func_y, self.ui.combo_amp_y, self.ui.combo_freq_y,
-            self.ui.combo_func_z, self.ui.combo_amp_z, self.ui.combo_freq_z,
-            self.ui.radioButton
-        ]
-        for w in widgets:
-            w.blockSignals(True)
+    @staticmethod
+    def parse_number(fields, key):
+        value = fields.get(key)
+        if value is None:
+            return None
+        try:
+            number = float(value)
+        except ValueError:
+            return None
+        return number if math.isfinite(number) else None
 
-        # 1. Actualizar los valores en pantalla para el usuario (Armónica Simple, Amplitud 4, Frecuencia 100)
-        # Eje X 
-        self.ui.combo_func_x.setCurrentIndex(1)
-        self.ui.combo_amp_x.setCurrentText("4")
-        self.ui.combo_freq_x.setCurrentText("100")
+    def handle_sample(self, fields):
+        timestamp = self.parse_number(fields, "t_ms")
+        if timestamp is None:
+            timestamp = self.last_sample_timestamp + 1.0
+        timestamp /= 1000.0
+        if timestamp < self.last_sample_timestamp:
+            self.plot_temperature.clear()
+            self.plot_humidity.clear()
+            self.plot_pressure.clear()
+        self.last_sample_timestamp = timestamp
+        self.last_sample_time = time.monotonic()
+        self.sample_count += 1
 
-        # Eje Y 
-        self.ui.combo_func_y.setCurrentIndex(1)
-        self.ui.combo_amp_y.setCurrentText("4")
-        self.ui.combo_freq_y.setCurrentText("100")
+        sample_keys = (
+            ("T", self.ui.temperature_check, self.ui.temperature_value, self.plot_temperature),
+            ("H", self.ui.humidity_check, self.ui.humidity_value, self.plot_humidity),
+            ("P", self.ui.pressure_check, self.ui.pressure_value, self.plot_pressure),
+        )
+        for key, control, value_label, plot in sample_keys:
+            value = self.parse_number(fields, key)
+            if not control.isChecked():
+                value_label.setText("--")
+                if self.sample_count == 1:
+                    plot.clear()
+                continue
+            if value is None:
+                value_label.setText("Inválida" if key in fields else "Sin dato")
+                plot.add_point(timestamp, math.nan)
+            else:
+                value_label.setText(f"{value:.2f}")
+                plot.add_point(timestamp, value)
 
-        # Eje Z
-        self.ui.combo_func_z.setCurrentIndex(1)
-        self.ui.combo_amp_z.setCurrentText("4")
-        self.ui.combo_freq_z.setCurrentText("100")
+        average = self.parse_number(fields, "temp_avg_c")
+        if self.ui.average_check.isChecked():
+            if average is not None:
+                self.ui.average_value.setText(f"{average:.2f} °C")
+            elif "temp_avg_c" in fields:
+                self.ui.average_value.setText("Inválido")
+            else:
+                self.ui.average_value.setText("Sin dato")
+            complete = fields.get("win_full")
+            if complete == "1":
+                self.ui.average_window_status.setText("Ventana completa")
+            elif complete == "0":
+                self.ui.average_window_status.setText("Ventana en formación")
+            elif "temp_avg_c" not in fields:
+                self.ui.average_window_status.setText("Sin resultado en paquete")
+            else:
+                self.ui.average_window_status.setText("Estado no informado")
+        else:
+            self.ui.average_value.setText("Deshabilitado")
+            self.ui.average_window_status.setText("Deshabilitado")
 
-        # Intervalo ambiental a 30s
-        self.ui.radioButton.setChecked(True)
+        sequence = fields.get("seq", "?")
+        self.ui.device_status.setText(f"Recibiendo datos · muestra #{sequence}")
 
-        # Reactivar las señales de los controles
-        for w in widgets:
-            w.blockSignals(False)
+    def handle_peak(self, fields):
+        peak = self.parse_number(fields, "peak_c")
+        threshold = self.parse_number(fields, "thr_c")
+        timestamp = self.parse_number(fields, "t_ms")
+        if peak is None or threshold is None:
+            self.show_error("Evento PEAK inválido: falta peak_c o thr_c.")
+            return
+        time_text = "tiempo desconocido" if timestamp is None else f"{timestamp / 1000.0:.2f} s"
+        self.ui.peak_events.insertItem(
+            0,
+            f"{time_text} · máximo {peak:.2f} °C · umbral {threshold:.2f} °C",
+        )
+        while self.ui.peak_events.count() > 100:
+            self.ui.peak_events.takeItem(self.ui.peak_events.count() - 1)
+        self.ui.confirmed_threshold.setText(f"Umbral confirmado: {threshold:.1f} °C")
+        self.add_log(f"EVENTO PEAK  {time_text}: {peak:.2f} °C (umbral {threshold:.2f} °C)")
 
-        # 2. Enviar la configuración inicial a la ESP32
-        if self.receiver and self.thread.isRunning():
-            self.receiver.send_command("START\n")
-            self.receiver.send_command("SET_ACC,X,1,4,100\n")
-            self.receiver.send_command("SET_ACC,Y,1,4,100\n")
-            self.receiver.send_command("SET_ACC,Z,1,4,100\n")
-            self.receiver.send_command("SET_ENV,30\n")
-            
+    def handle_ack(self, fields):
+        command = fields.get("cmd", "comando")
+        details = ", ".join(
+            f"{key}={value}"
+            for key, value in fields.items()
+            if key != "cmd"
+        )
+        self.ui.confirmed_config.setText(
+            f"Confirmado por ESP32 · {command}" + (f" · {details}" if details else "")
+        )
+        if "thr_c" in fields:
+            self.ui.confirmed_threshold.setText(f"Umbral confirmado: {fields['thr_c']} °C")
+        self.add_log(f"ACK  {command}" + (f" · {details}" if details else ""))
 
-    def update_env_config(self, intervalo_s):
-        if self.receiver and self.thread.isRunning():
-            comando = f"SET_ENV,{intervalo_s}\n"
-            self.receiver.send_command(comando)
+    def check_data_timeout(self):
+        if (
+            self.serial_thread is not None
+            and self.serial_thread.isRunning()
+            and self.last_sample_time is not None
+            and time.monotonic() - self.last_sample_time > 3.0
+        ):
+            self.ui.device_status.setText("Sin muestras por más de 3 s")
+
+    def show_error(self, message):
+        self.ui.device_status.setText(message)
+        self.add_log(f"ERROR  {message}")
+
+    def add_log(self, message):
+        self.ui.event_log.appendPlainText(message)
+        maximum_blocks = 200
+        document = self.ui.event_log.document()
+        while document.blockCount() > maximum_blocks:
+            cursor = self.ui.event_log.textCursor()
+            cursor.movePosition(cursor.MoveOperation.Start)
+            cursor.select(cursor.SelectionType.BlockUnderCursor)
+            cursor.removeSelectedText()
+            cursor.deleteChar()
+
+    def closeEvent(self, event):
+        if self.worker is not None:
+            self.worker.request_stop()
+            if self.serial_thread is not None and not self.serial_thread.wait(1500):
+                QMessageBox.warning(
+                    self,
+                    "Desconexión pendiente",
+                    "El puerto serial aún está cerrándose. Intenta cerrar la ventana nuevamente.",
+                )
+                event.ignore()
+                return
+        event.accept()
 
 
 if __name__ == "__main__":

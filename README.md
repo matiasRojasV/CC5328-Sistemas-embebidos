@@ -29,10 +29,12 @@ Repositorio del ramo ordenado por módulos.
 
 ## Interfaz Gráfica (GUI)
 Aplicación desarrollada en Python 3.8+ utilizando PyQt6 y Matplotlib.
-- Conexión serial UART asincrónica mediante QThread.
-- Visualización en tiempo real con ventanas deslizantes para 3 ejes de aceleración.
-- Gráfico histórico y displays digitales para variables ambientales.
-- Panel de control dinámico para alterar parámetros de muestreo en el microcontrolador.
+- `gui_python/main.py` implementa la interfaz T2 y la comunicación serial en un hilo de trabajo.
+- El selector de puerto filtra inicialmente adaptadores USB-serial comunes (ESP32, CP210x, CH340 y FTDI); se puede desactivar para mostrar todos los puertos.
+- Permite seleccionar puerto y velocidad, frecuencia de muestreo y las variables T/H/P que se transmiten.
+- Configura desde la GUI el promedio móvil y la detección de máximos locales ejecutados por el ESP32.
+- Muestra valores, gráficos históricos, promedio confirmado/recibido, eventos de pico, ACK y errores.
+- El protocolo serial esperado está documentado en `DocsProtocolosComunicacionESP32-GUI.md`.
 
 ## Instrucciones de Compilación y Ejecución
 
@@ -40,29 +42,24 @@ Aplicación desarrollada en Python 3.8+ utilizando PyQt6 y Matplotlib.
 Desde la raíz del proyecto, ingresar a la carpeta del microcontrolador y compilar utilizando ESP-IDF
 
 **2. Aplicación Python:**
-desde la raiz del proyecto, instalar las dependencias en un entorno virtual y ejecutar la interfaz
+Desde la raíz del proyecto, instalar las dependencias en un entorno virtual y ejecutar la interfaz:
 
 ```bash
-# Para crear el Ambiente virtual:
+# Crear el entorno virtual
+python3 -m venv gui_python/.venv
 
-## en windows
-python -m venv .venv
-## en linux (creo)
-python3 -m venv .venv
+# Activarlo en Linux/macOS
+source gui_python/.venv/bin/activate
 
+# Activarlo en Windows (PowerShell)
+# gui_python\.venv\Scripts\Activate.ps1
 
-# Activar entorno virtual (linux)
-gui_python\.venv\Scripts\activate  
-
-# Activar entorno virtual (linux)
-gui_python/.venv/bin/activate  
-
-# Instalacion de dependencias
+# Instalar dependencias y ejecutar la GUI
 pip install -r gui_python/requirements.txt
-
-# Ejecucion de la interfaz
 python gui_python/main.py
 ```
+
+La GUI utiliza el marcador `<{DP}>` y los mensajes `SAMPLE`, `PEAK`, `ACK` y `ERR` descritos en el documento de protocolo. Las frecuencias, ventanas y comandos enviados corresponden a los valores definidos por la T2.
 
 ## Nota
 
