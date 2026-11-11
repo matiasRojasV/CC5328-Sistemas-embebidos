@@ -140,7 +140,7 @@ esp_err_t bme688_read(bool req_t, bool req_h, bool req_p, bme688_data_t *out) {
     uint8_t buf[2];
     uint8_t osrs_h = req_h ? 0x01 : 0x00;
     uint8_t osrs_p = req_p ? 0x01 : 0x00;
-    uint8_t osrs_t = req_t ? 0x01 : 0x00;
+    uint8_t osrs_t = (req_t || req_h || req_p) ? 0x01 : 0x00; // esto es para que si no se nos solicita la temperatura, de todas formas no se "apague su recoleccion" y permita los calculos de la presion y humedad
 
     buf[0] = BME688_CTRL_HUM_ADDR; buf[1] = osrs_h;
     if (i2c_master_transmit(dev_handle, buf, 2, I2C_TIMEOUT_MS) != ESP_OK) {

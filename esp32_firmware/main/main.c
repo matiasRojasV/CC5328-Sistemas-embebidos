@@ -204,8 +204,8 @@ void task_adquisicion_bme(void *pvParameters) {
                                        ",P=%.2f", meas.pressure_hpa);
                 }
 
+                registrar_muestra_temp(meas.temperature_c, now_ms, seq);
                 if (need_t) {
-                    registrar_muestra_temp(meas.temperature_c, now_ms, seq);
 
                     // promedio movil temporal (temp_avg_c)
                     if (do_avg) {
