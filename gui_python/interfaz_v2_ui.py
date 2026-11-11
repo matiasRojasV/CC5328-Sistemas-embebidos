@@ -88,7 +88,7 @@ class Ui_MainWindow:
         self.device_status = QtWidgets.QLabel("Esperando conexión")
         self.device_status.setObjectName("deviceStatus")
         self.device_status.setStyleSheet(
-            "QLabel#deviceStatus { padding: 8px; background: #eef2f5; border-radius: 4px; }"
+            "QLabel#deviceStatus { padding: 8px; background: #eef2f5; color: #1f2937; font-weight: bold; border-radius: 4px; }"
         )
         root_layout.addWidget(self.device_status)
 

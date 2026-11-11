@@ -126,6 +126,7 @@ class HistoryPlot(FigureCanvas):
         self.axes.set_xlabel("Tiempo desde inicio (s)")
         self.axes.set_ylabel(unit)
         self.axes.grid(True, alpha=0.3)
+        figure.tight_layout(pad=1.0)
         self.line, = self.axes.plot([], [], color=color)
         self.times = deque(maxlen=MAX_PLOT_POINTS)
         self.values = deque(maxlen=MAX_PLOT_POINTS)
