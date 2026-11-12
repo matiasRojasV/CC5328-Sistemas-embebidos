@@ -7,7 +7,7 @@ Repositorio del ramo ordenado por módulos. Ahora incorporando el sensor ambient
 - **Samuel Romero M.**
 
 ## Video de Demostración
-- **Enlace del video de la tarea 2:** 
+- **Enlace del video de la tarea 2:** https://youtu.be/phNr0ZTDlCw
 
 ---
 
